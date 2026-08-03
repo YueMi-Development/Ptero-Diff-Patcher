@@ -53,8 +53,9 @@ module.exports = async function apply(parsed) {
     const noBackup = !!(parsed.options["no-backup"] || parsed.options.noBackup);
     const reverse = !!(parsed.options.reverse || parsed.options.R);
     
+    const noFuzzy = !!(parsed.options["no-fuzzy"] || parsed.options.noFuzzy);
     const fuzzOpt = parsed.options.fuzz || parsed.options.f;
-    const fuzzFactor = fuzzOpt ? parseInt(fuzzOpt, 10) || 0 : 0;
+    const maxFuzz = noFuzzy ? 0 : (fuzzOpt !== undefined ? parseInt(fuzzOpt, 10) || 0 : 3);
 
     try {
         let patchSources = [];
@@ -134,16 +135,25 @@ module.exports = async function apply(parsed) {
                 const absPath = path.join(projectDir, relPath);
                 const originalContent = getFileContent(absPath);
 
-                const patchedResult = diff.applyPatch(originalContent, p, { fuzzFactor });
+                let patchedResult = false;
+                let appliedFuzz = 0;
+                for (let f = 0; f <= maxFuzz; f++) {
+                    patchedResult = diff.applyPatch(originalContent, p, { fuzzFactor: f });
+                    if (patchedResult !== false) {
+                        appliedFuzz = f;
+                        break;
+                    }
+                }
+
                 if (patchedResult === false) {
-                    logger.error(`[FAIL] Conflict: Could not apply patch from ${path.basename(sourceItem.path)} to ${relPath}`);
+                    logger.error(`[FAIL] Conflict: Could not apply patch from ${path.basename(sourceItem.path)} to ${relPath} (tried fuzz 0 to ${maxFuzz})`);
                     process.exit(1);
                 }
 
                 fileCache[absPath].content = patchedResult;
                 fileCache[absPath].dirty = true;
                 fileCache[absPath].relativePath = relPath;
-                logger.info(`[OK] Applied patch step to ${relPath}`);
+                logger.info(`[OK] Applied patch step to ${relPath} (fuzz: ${appliedFuzz})`);
             }
         }
 
