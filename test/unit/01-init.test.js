@@ -15,7 +15,7 @@ function runCLI(args) {
     }
 }
 
-describe("init command", () => {
+describe("init command step", () => {
     beforeEach(() => {
         if (fs.existsSync(TEST_SCRATCH_DIR)) {
             fs.rmSync(TEST_SCRATCH_DIR, { recursive: true, force: true });

@@ -15,7 +15,7 @@ function runCLI(args) {
     }
 }
 
-describe("large 10 commit patch generation and application", () => {
+describe("large 10 commit patch generation and application step", () => {
     beforeEach(() => {
         if (fs.existsSync(TEST_SCRATCH_DIR)) {
             fs.rmSync(TEST_SCRATCH_DIR, { recursive: true, force: true });

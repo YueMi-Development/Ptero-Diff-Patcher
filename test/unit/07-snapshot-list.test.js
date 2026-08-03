@@ -1,5 +1,6 @@
 const fs = require("fs");
 const path = require("path");
+const tar = require("tar");
 const { execSync } = require("child_process");
 const { TEST_PROJECT_DIR, TEST_BACKUP_DIR, TEST_SCRATCH_DIR } = require("../../utils/const");
 
@@ -15,7 +16,7 @@ function runCLI(args) {
     }
 }
 
-describe("apply dry-run", () => {
+describe("snapshot list step", () => {
     beforeEach(() => {
         if (fs.existsSync(TEST_SCRATCH_DIR)) {
             fs.rmSync(TEST_SCRATCH_DIR, { recursive: true, force: true });
@@ -25,30 +26,23 @@ describe("apply dry-run", () => {
         runCLI(`init --project-dir "${TEST_PROJECT_DIR}" --backup-dir "${TEST_BACKUP_DIR}"`);
     });
 
-    test("should dry-run patch cleanly without modifying file", () => {
+    test("should list snapshot backups successfully", async () => {
         const filePath = path.join(TEST_PROJECT_DIR, "hello.txt");
-        fs.writeFileSync(filePath, "Hello World\nLine 2\nLine 3\n", "utf8");
+        fs.writeFileSync(filePath, "Hello World\n", "utf8");
 
-        const patchContent = [
-            "diff --git a/hello.txt b/hello.txt",
-            "--- a/hello.txt",
-            "+++ b/hello.txt",
-            "@@ -1,3 +1,4 @@",
-            " Hello World",
-            "-Line 2",
-            "+Modified Line 2",
-            " Line 3",
-            "+Line 4"
-        ].join("\n") + "\n";
+        const backupFilename = "backup-2026-08-03T15-00-00-000Z.tar.gz";
+        const backupPath = path.join(TEST_BACKUP_DIR, backupFilename);
 
-        const patchFile = path.join(TEST_SCRATCH_DIR, "dry-run.patch");
-        fs.writeFileSync(patchFile, patchContent, "utf8");
+        await tar.c(
+            {
+                gzip: true,
+                file: backupPath,
+                cwd: TEST_PROJECT_DIR
+            },
+            ["hello.txt"]
+        );
 
-        const dryRunOut = runCLI(`apply "${patchFile}" --dry-run`);
-        expect(dryRunOut).toContain("Dry-run complete. All patches can be applied cleanly");
-
-        // Verify file is NOT modified
-        const fileContent = fs.readFileSync(filePath, "utf8");
-        expect(fileContent).toBe("Hello World\nLine 2\nLine 3\n");
+        const out = runCLI("snapshot list");
+        expect(out).toContain(backupFilename);
     });
 });

@@ -15,7 +15,7 @@ function runCLI(args) {
     }
 }
 
-describe("generate command (single commit)", () => {
+describe("generate command (single commit) step", () => {
     beforeEach(() => {
         if (fs.existsSync(TEST_SCRATCH_DIR)) {
             fs.rmSync(TEST_SCRATCH_DIR, { recursive: true, force: true });
