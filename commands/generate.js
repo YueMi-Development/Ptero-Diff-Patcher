@@ -6,6 +6,44 @@ const { getConfig } = require("../utils/config");
 const { DEFAULT_PROJECT_DIR } = require("../utils/const");
 const logger = require("../utils/logger");
 
+function padZero(num, size = 4) {
+    let s = num + "";
+    while (s.length < size) s = "0" + s;
+    return s;
+}
+
+function sanitizeName(name) {
+    return name
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-") // replace non-alphanumeric chars with hyphen
+        .replace(/^-+|-+$/g, "");    // trim leading/trailing hyphens
+}
+
+async function resolveCommitRef(projectDir, ref) {
+    // Handle relative refs like HEAD~1 or HEAD^
+    const match = ref.match(/^(.*)(?:~|\^)(\d*)$/);
+    let baseRef = ref;
+    let parentsToWalk = 0;
+    if (match) {
+        baseRef = match[1] || "HEAD";
+        parentsToWalk = match[2] ? parseInt(match[2], 10) : 1;
+    } else if (ref.endsWith("~") || ref.endsWith("^")) {
+        baseRef = ref.slice(0, -1) || "HEAD";
+        parentsToWalk = 1;
+    }
+
+    let oid = await git.resolveRef({ fs, dir: projectDir, ref: baseRef });
+    for (let i = 0; i < parentsToWalk; i++) {
+        const commit = await git.readCommit({ fs, dir: projectDir, oid });
+        if (commit.commit.parent && commit.commit.parent.length > 0) {
+            oid = commit.commit.parent[0];
+        } else {
+            throw new Error(`Commit ${oid} has no parent (reached root commit during resolution of ${ref})`);
+        }
+    }
+    return oid;
+}
+
 module.exports = async function generate(parsed) {
     logger.info("Generating patch...");
 
@@ -18,99 +56,167 @@ module.exports = async function generate(parsed) {
     }
 
     const commitsOpt = parsed.options.commits || parsed.options.c;
+    if (!commitsOpt || !commitsOpt.includes("..")) {
+        logger.error("Error: Please specify a commit range using '..' (e.g. HEAD~1..HEAD or HEAD..HEAD).");
+        logger.info("Usage: ptero-patch generate --commits <commit1>..<commit2>");
+        process.exit(1);
+    }
+
     const outputOpt = parsed.options.output || parsed.options.o || "ptero.patch";
 
-    let ref1 = "HEAD";
-    let ref2 = null; // represents working directory if null
+    const parts = commitsOpt.split("..");
+    const ref1 = parts[0] || "HEAD";
+    const ref2 = parts[1] || "HEAD";
 
-    if (commitsOpt) {
-        if (commitsOpt.includes("..")) {
-            const parts = commitsOpt.split("..");
-            ref1 = parts[0] || "HEAD";
-            ref2 = parts[1] || "HEAD";
+    // Determine output directory and base prefix
+    let outDir = process.cwd();
+    let baseName = "patch";
+
+    const resolvedOutput = path.isAbsolute(outputOpt) ? outputOpt : path.join(process.cwd(), outputOpt);
+    try {
+        const stats = fs.existsSync(resolvedOutput) ? fs.statSync(resolvedOutput) : null;
+        if (stats && stats.isDirectory()) {
+            outDir = resolvedOutput;
         } else {
-            ref1 = commitsOpt;
+            outDir = path.dirname(resolvedOutput);
+            baseName = path.basename(resolvedOutput).replace(/\.(patch|diff)$/i, "");
         }
+    } catch (e) {
+        outDir = path.dirname(resolvedOutput);
+        baseName = path.basename(resolvedOutput).replace(/\.(patch|diff)$/i, "");
+    }
+
+    if (!fs.existsSync(outDir)) {
+        fs.mkdirSync(outDir, { recursive: true });
     }
 
     try {
         logger.info(`Analyzing repository changes in: ${projectDir}`);
-        let trees = [];
-        if (ref2) {
-            logger.info(`Comparing commits: ${ref1} .. ${ref2}`);
-            const oid1 = await git.resolveRef({ fs, dir: projectDir, ref: ref1 });
-            const oid2 = await git.resolveRef({ fs, dir: projectDir, ref: ref2 });
-            trees = [git.TREE({ ref: oid1 }), git.TREE({ ref: oid2 })];
-        } else {
-            logger.info(`Comparing HEAD commit against working directory...`);
-            const oid1 = await git.resolveRef({ fs, dir: projectDir, ref: ref1 });
-            trees = [git.TREE({ ref: oid1 }), git.WORKDIR()];
-        }
 
-        const patchBlocks = [];
+        let workQueue = []; // list of { title: string, trees: Array, isWorkdir: boolean }
 
-        await git.walk({
-            fs,
-            dir: projectDir,
-            trees,
-            map: async function(filepath, [A, B]) {
-                // Skip directories and git internals
-                if (filepath === "." || filepath.startsWith(".git/")) return;
-                const typeA = A ? await A.type() : null;
-                const typeB = B ? await B.type() : null;
+        logger.info(`Comparing commits range: ${ref1} .. ${ref2}`);
+        const oid1 = await resolveCommitRef(projectDir, ref1);
+        const oid2 = await resolveCommitRef(projectDir, ref2);
+        const log = await git.log({ fs, dir: projectDir, ref: oid2 });
 
-                if (typeA === "tree" || typeB === "tree") {
-                    return; // Skip walking directory names themselves
-                }
-
-                const oidA = A ? await A.oid() : null;
-                const oidB = B ? await B.oid() : null;
-
-                if (oidA === oidB) {
-                    return; // No change
-                }
-
-                // Retrieve contents
-                let contentA = "";
-                if (A) {
-                    const blob = await A.content();
-                    contentA = Buffer.from(blob).toString("utf8");
-                }
-
-                let contentB = "";
-                if (B) {
-                    if (ref2) {
-                        const blob = await B.content();
-                        contentB = Buffer.from(blob).toString("utf8");
-                    } else {
-                        // Working directory file
-                        const absolutePath = path.join(projectDir, filepath);
-                        if (fs.existsSync(absolutePath)) {
-                            contentB = fs.readFileSync(absolutePath, "utf8");
-                        }
-                    }
-                }
-
-                const fileA = A ? "a/" + filepath : "/dev/null";
-                const fileB = B ? "b/" + filepath : "/dev/null";
-
-                const patchStr = diff.createTwoFilesPatch(fileA, fileB, contentA, contentB, "", "", { context: 3 });
-                // Only push if there's actual diff content
-                if (patchStr && patchStr.trim().length > 0) {
-                    patchBlocks.push(patchStr);
-                }
+        const commitList = [];
+        for (const commit of log) {
+            if (commit.oid === oid1) {
+                break;
             }
-        });
+            commitList.push(commit);
+        }
+        commitList.reverse(); // oldest first
 
-        if (patchBlocks.length === 0) {
-            logger.info("No changes detected. Patch file not created.");
+        if (commitList.length === 0) {
+            logger.info("No commits found in the specified range.");
             return;
         }
 
-        const patchContent = patchBlocks.join("\n");
-        const outputPath = path.isAbsolute(outputOpt) ? outputOpt : path.join(process.cwd(), outputOpt);
-        fs.writeFileSync(outputPath, patchContent, "utf8");
-        logger.info(`Patch file successfully created at: ${outputPath}`);
+        for (const commit of commitList) {
+            const title = sanitizeName(commit.commit.message.split("\n")[0]) || "commit";
+            const parentRef = commit.commit.parent && commit.commit.parent.length > 0 ? commit.commit.parent[0] : null;
+            
+            let trees;
+            if (parentRef) {
+                trees = [git.TREE({ ref: parentRef }), git.TREE({ ref: commit.oid })];
+            } else {
+                trees = [git.TREE({ ref: commit.oid })]; // root commit
+            }
+
+            workQueue.push({
+                title,
+                trees,
+                isWorkdir: false
+            });
+        }
+
+        let sequenceNum = 1;
+
+        for (const step of workQueue) {
+            const addedDiffs = [];
+            const modifiedDiffs = [];
+
+            await git.walk({
+                fs,
+                dir: projectDir,
+                trees: step.trees,
+                map: async function(filepath, treesList) {
+                    // Skip directories and git internals
+                    if (filepath === "." || filepath.startsWith(".git/")) return;
+
+                    // If treesList has parent and child
+                    const hasParent = treesList.length > 1;
+                    const A = hasParent ? treesList[0] : null;
+                    const B = hasParent ? treesList[1] : treesList[0];
+
+                    const typeA = A ? await A.type() : null;
+                    const typeB = B ? await B.type() : null;
+
+                    if (typeA === "tree" || typeB === "tree") return;
+
+                    const oidA = A ? await A.oid() : null;
+                    const oidB = B ? await B.oid() : null;
+
+                    if (oidA === oidB) return; // No change
+
+                    // Retrieve contents
+                    let contentA = "";
+                    if (A) {
+                        const blob = await A.content();
+                        contentA = Buffer.from(blob).toString("utf8");
+                    }
+
+                    let contentB = "";
+                    if (B) {
+                        if (step.isWorkdir) {
+                            const absolutePath = path.join(projectDir, filepath);
+                            if (fs.existsSync(absolutePath)) {
+                                contentB = fs.readFileSync(absolutePath, "utf8");
+                            }
+                        } else {
+                            const blob = await B.content();
+                            contentB = Buffer.from(blob).toString("utf8");
+                        }
+                    }
+
+                    const fileA = A ? "a/" + filepath : "/dev/null";
+                    const fileB = B ? "b/" + filepath : "/dev/null";
+
+                    const patchStr = diff.createTwoFilesPatch(fileA, fileB, contentA, contentB, "", "", { context: 3 });
+                    if (patchStr && patchStr.trim().length > 0) {
+                        // Check if it's an addition (no parent or A was null)
+                        const isAddition = !A;
+                        if (isAddition) {
+                            addedDiffs.push(patchStr);
+                        } else {
+                            modifiedDiffs.push(patchStr);
+                        }
+                    }
+                }
+            });
+
+            // Write added files patch if any
+            if (addedDiffs.length > 0) {
+                const seqStr = padZero(sequenceNum++);
+                const filename = `${seqStr}-${step.title}-added.patch`;
+                const filepath = path.join(outDir, filename);
+                fs.writeFileSync(filepath, addedDiffs.join("\n"), "utf8");
+                logger.info(`Patch created: ${filename}`);
+            }
+
+            // Write modified files patch if any
+            if (modifiedDiffs.length > 0) {
+                const seqStr = padZero(sequenceNum++);
+                const filename = `${seqStr}-${step.title}-modified.patch`;
+                const filepath = path.join(outDir, filename);
+                fs.writeFileSync(filepath, modifiedDiffs.join("\n"), "utf8");
+                logger.info(`Patch created: ${filename}`);
+            }
+        }
+
+        logger.info("Patch generation completed.");
     } catch (err) {
         logger.error("Error generating patch:", err.message);
         process.exit(1);
