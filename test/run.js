@@ -1,13 +1,7 @@
 const fs = require("fs");
 const path = require("path");
 const { execSync } = require("child_process");
-const {
-    TEST_DIR,
-    TEST_SCRATCH_DIR,
-    TEST_PROJECT_DIR,
-    TEST_BACKUP_DIR,
-    PATCH_OUT_PREFIX
-} = require("../utils/const");
+const { TEST_DIR, TEST_SCRATCH_DIR } = require("../utils/const");
 
 const WORKSPACE_DIR = path.resolve(__dirname, "..");
 
@@ -24,102 +18,61 @@ function runCLI(args) {
     }
 }
 
-async function test() {
-    console.log("Setting up test environment...");
+function getTestFiles(dir) {
+    let results = [];
+    if (!fs.existsSync(dir)) return results;
+    const list = fs.readdirSync(dir);
+    list.forEach(file => {
+        const fullPath = path.join(dir, file);
+        const stat = fs.statSync(fullPath);
+        if (stat && stat.isDirectory()) {
+            results = results.concat(getTestFiles(fullPath));
+        } else if (file.endsWith(".test.js") || file.endsWith(".js")) {
+            results.push(fullPath);
+        }
+    });
+    return results;
+}
 
-    // Clean previous runs
+async function runAll() {
+    console.log("Setting up test environment...");
     if (fs.existsSync(TEST_SCRATCH_DIR)) {
         fs.rmSync(TEST_SCRATCH_DIR, { recursive: true, force: true });
     }
     fs.mkdirSync(TEST_SCRATCH_DIR, { recursive: true });
-    fs.mkdirSync(TEST_PROJECT_DIR, { recursive: true });
-    fs.mkdirSync(TEST_BACKUP_DIR, { recursive: true });
 
-    // Initialize git repo in test project
-    console.log("Initializing git repository in test-project...");
-    execSync("git init", { cwd: TEST_PROJECT_DIR });
-    execSync("git config user.name 'Test'", { cwd: TEST_PROJECT_DIR });
-    execSync("git config user.email 'test@example.com'", { cwd: TEST_PROJECT_DIR });
+    const unitDir = path.join(TEST_DIR, "unit");
+    const testFiles = getTestFiles(unitDir);
 
-    // Create hello.txt and commit
-    const filePath = path.join(TEST_PROJECT_DIR, "hello.txt");
-    fs.writeFileSync(filePath, "Hello World\nLine 2\nLine 3\n", "utf8");
-    execSync("git add hello.txt", { cwd: TEST_PROJECT_DIR });
-    execSync('git commit -m "Initial commit"', { cwd: TEST_PROJECT_DIR });
-
-    console.log("\n1. Testing 'init' command...");
-    runCLI(`init --project-dir "${TEST_PROJECT_DIR}" --backup-dir "${TEST_BACKUP_DIR}"`);
-
-    // Modify hello.txt and commit as Second commit
-    console.log("Modifying and committing hello.txt as Second commit...");
-    fs.writeFileSync(filePath, "Hello World\nModified Line 2\nLine 3\nLine 4\n", "utf8");
-    execSync("git add hello.txt", { cwd: TEST_PROJECT_DIR });
-    execSync('git commit -m "Second commit"', { cwd: TEST_PROJECT_DIR });
-
-    console.log("\n2. Testing 'generate' command...");
-    runCLI(`generate --commits HEAD~1..HEAD --output "${PATCH_OUT_PREFIX}"`);
-
-    const generatedPatchFile = path.join(TEST_SCRATCH_DIR, "0001-second-commit-modified.patch");
-    console.log("Generated patch content:");
-    console.log(fs.readFileSync(generatedPatchFile, "utf8"));
-
-    // Reset hello.txt back to commit state manually
-    console.log("Resetting hello.txt to original...");
-    fs.writeFileSync(filePath, "Hello World\nLine 2\nLine 3\n", "utf8");
-
-    console.log("\n3. Testing 'apply' command (dry-run)...");
-    runCLI(`apply "${generatedPatchFile}" --dry-run`);
-
-    console.log("\n4. Testing 'apply' command (actual)...");
-    runCLI(`apply "${generatedPatchFile}"`);
-
-    console.log("Content after patch:");
-    console.log(fs.readFileSync(filePath, "utf8"));
-
-    console.log("\n5. Testing 'snapshot list' command...");
-    const listOut = runCLI("snapshot list");
-
-    // Extract backup filename from output
-    const match = listOut.match(/backup-[\w-]+\.tar\.gz/);
-    if (!match) {
-        throw new Error("Could not find backup file in list output!");
+    if (testFiles.length === 0) {
+        console.log("No unit tests found under test/unit/");
+        return;
     }
-    const backupFile = match[0];
-    console.log(`Found backup snapshot: ${backupFile}`);
 
-    // Reset hello.txt back to original manually
-    fs.writeFileSync(filePath, "Hello World\nLine 2\nLine 3\n", "utf8");
-    console.log("Reset hello.txt manually. Content before restore:");
-    console.log(fs.readFileSync(filePath, "utf8"));
+    console.log(`Found ${testFiles.length} test file(s). Running tests...`);
+    for (const file of testFiles) {
+        // Ensure a clean scratch folder state before each test run
+        if (fs.existsSync(TEST_SCRATCH_DIR)) {
+            fs.rmSync(TEST_SCRATCH_DIR, { recursive: true, force: true });
+        }
+        fs.mkdirSync(TEST_SCRATCH_DIR, { recursive: true });
 
-    console.log("\n6. Testing 'snapshot restore' command...");
-    runCLI(`snapshot restore "${backupFile}"`);
-
-    console.log("Content after restore (should be patched content):");
-    console.log(fs.readFileSync(filePath, "utf8"));
-
-    console.log("\n7. Testing 'apply' command with a directory of patches...");
-    const patchesDir = path.join(TEST_SCRATCH_DIR, "test-patches-dir");
-    if (fs.existsSync(patchesDir)) {
-        fs.rmSync(patchesDir, { recursive: true, force: true });
+        const relativeName = path.relative(unitDir, file);
+        console.log(`\n========================================`);
+        console.log(`Running Category: ${relativeName}`);
+        console.log(`========================================`);
+        const runTest = require(file);
+        if (typeof runTest === "function") {
+            await runTest(runCLI);
+        } else {
+            console.warn(`Warning: Test file ${relativeName} does not export a function.`);
+        }
     }
-    fs.mkdirSync(patchesDir);
-    // Copy patch to the patches folder
-    fs.copyFileSync(generatedPatchFile, path.join(patchesDir, "p1.patch"));
 
-    // Reset hello.txt manually
-    fs.writeFileSync(filePath, "Hello World\nLine 2\nLine 3\n", "utf8");
-    console.log("Reset hello.txt manually. Content before directory patch:");
-    console.log(fs.readFileSync(filePath, "utf8"));
-
-    runCLI(`apply "${patchesDir}"`);
-    console.log("Content after directory patch (should be modified content):");
-    console.log(fs.readFileSync(filePath, "utf8"));
-
-    console.log("\nALL TESTS PASSED SUCCESSFULLY!");
+    console.log("\nALL TESTS COMPLETED SUCCESSFULLY!");
 }
 
-test().catch(err => {
-    console.error("Test failed:", err);
+runAll().catch(err => {
+    console.error("Test execution failed:", err);
     process.exit(1);
 });
