@@ -1,0 +1,19 @@
+{
+  "name": "ptero-diff-patcher",
+  "version": "1.0.0",
+  "description": "A lightweight diff patcher for Pterodactyl",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/YueMi-Development/Ptero-Diff-Patcher.git"
+  },
+  "author": "YueMi Development",
+  "license": "GPL-3.0-only",
+  "bugs": {
+    "url": "https://github.com/YueMi-Development/Ptero-Diff-Patcher/issues"
+  },
+  "homepage": "https://github.com/YueMi-Development/Ptero-Diff-Patcher#readme"
+}
