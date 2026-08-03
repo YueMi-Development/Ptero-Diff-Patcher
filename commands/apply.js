@@ -99,7 +99,8 @@ module.exports = async function apply(parsed) {
                 content,
                 exists,
                 originalContent: content,
-                dirty: false
+                dirty: false,
+                deleted: false
             };
             return content;
         }
@@ -134,6 +135,18 @@ module.exports = async function apply(parsed) {
 
                 const absPath = path.join(projectDir, relPath);
                 const originalContent = getFileContent(absPath);
+
+                const isDeletion = newFile === "/dev/null";
+                if (isDeletion) {
+                    fileCache[absPath].content = "";
+                    fileCache[absPath].dirty = true;
+                    fileCache[absPath].deleted = true;
+                    fileCache[absPath].relativePath = relPath;
+                    logger.info(`[OK] Applied patch step to delete ${relPath} (fuzz: 0)`);
+                    continue;
+                }
+
+                fileCache[absPath].deleted = false;
 
                 let patchedResult = false;
                 let appliedFuzz = 0;
@@ -195,6 +208,13 @@ module.exports = async function apply(parsed) {
         if (!dryRun) {
             for (const absPath of modifiedFiles) {
                 const cacheObj = fileCache[absPath];
+                if (cacheObj.deleted) {
+                    if (fs.existsSync(absPath)) {
+                        fs.unlinkSync(absPath);
+                        logger.info(`[DELETE] Deleted ${cacheObj.relativePath}`);
+                    }
+                    continue;
+                }
                 const dirOfFile = path.dirname(absPath);
                 if (!fs.existsSync(dirOfFile)) {
                     fs.mkdirSync(dirOfFile, { recursive: true });

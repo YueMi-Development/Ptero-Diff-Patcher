@@ -1,9 +1,9 @@
 const fs = require("fs");
 const path = require("path");
 const { execSync } = require("child_process");
-const { TEST_PROJECT_DIR, TEST_BACKUP_DIR, TEST_SCRATCH_DIR } = require("../../../utils/const");
+const { TEST_PROJECT_DIR, TEST_BACKUP_DIR, TEST_SCRATCH_DIR } = require("../../utils/const");
 
-const WORKSPACE_DIR = path.resolve(__dirname, "../../..");
+const WORKSPACE_DIR = path.resolve(__dirname, "../..");
 
 function runCLI(args) {
     try {
