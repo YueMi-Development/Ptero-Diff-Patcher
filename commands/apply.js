@@ -52,6 +52,9 @@ module.exports = async function apply(parsed) {
     const dryRun = !!(parsed.options["dry-run"] || parsed.options.dryRun);
     const noBackup = !!(parsed.options["no-backup"] || parsed.options.noBackup);
     const reverse = !!(parsed.options.reverse || parsed.options.R);
+    
+    const fuzzOpt = parsed.options.fuzz || parsed.options.f;
+    const fuzzFactor = fuzzOpt ? parseInt(fuzzOpt, 10) || 0 : 0;
 
     try {
         let patchSources = [];
@@ -131,7 +134,7 @@ module.exports = async function apply(parsed) {
                 const absPath = path.join(projectDir, relPath);
                 const originalContent = getFileContent(absPath);
 
-                const patchedResult = diff.applyPatch(originalContent, p);
+                const patchedResult = diff.applyPatch(originalContent, p, { fuzzFactor });
                 if (patchedResult === false) {
                     logger.error(`[FAIL] Conflict: Could not apply patch from ${path.basename(sourceItem.path)} to ${relPath}`);
                     process.exit(1);
