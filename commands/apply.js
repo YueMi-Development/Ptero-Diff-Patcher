@@ -54,119 +54,144 @@ module.exports = async function apply(parsed) {
     const reverse = !!(parsed.options.reverse || parsed.options.R);
 
     try {
-        logger.info(`Loading patch from: ${patchSource}`);
-        let patchContent = "";
+        let patchSources = [];
         if (patchSource.startsWith("http://") || patchSource.startsWith("https://")) {
-            const response = await axios.get(patchSource, { responseType: "text" });
-            patchContent = response.data;
+            patchSources.push({ type: "url", path: patchSource });
         } else {
-            const absolutePatchPath = path.isAbsolute(patchSource) ? patchSource : path.join(process.cwd(), patchSource);
-            if (!fs.existsSync(absolutePatchPath)) {
-                logger.error(`Error: Patch file does not exist at ${absolutePatchPath}`);
+            const absolutePath = path.isAbsolute(patchSource) ? patchSource : path.join(process.cwd(), patchSource);
+            if (!fs.existsSync(absolutePath)) {
+                logger.error(`Error: Path does not exist at ${absolutePath}`);
                 process.exit(1);
             }
-            patchContent = fs.readFileSync(absolutePatchPath, "utf8");
-        }
+            const stat = fs.statSync(absolutePath);
+            if (stat.isDirectory()) {
+                const files = fs.readdirSync(absolutePath)
+                    .filter(f => f.endsWith(".patch") || f.endsWith(".diff"))
+                    .map(f => path.join(absolutePath, f));
 
-        let patches = diff.parsePatch(patchContent);
-        if (patches.length === 0) {
-            logger.error("Error: Could not parse any valid patches from the input source.");
-            process.exit(1);
-        }
+                if (files.length === 0) {
+                    logger.error(`Error: No .patch or .diff files found in directory ${absolutePath}`);
+                    process.exit(1);
+                }
 
-        if (reverse) {
-            console.log("Reversing patches...");
-            patches = patches.map(reversePatch);
-        }
-
-        // 1. Identify files to modify and back up
-        const filesToBackup = [];
-        const filesToPatch = []; // list of { patch, relativePath, absolutePath, exists }
-
-        for (const p of patches) {
-            const oldFile = p.oldFileName;
-            const newFile = p.newFileName;
-            const targetFile = (oldFile && oldFile !== "/dev/null") ? oldFile : newFile;
-            const relPath = cleanPath(targetFile);
-            if (!relPath || relPath === "/dev/null") continue;
-
-            const absPath = path.join(projectDir, relPath);
-            const exists = fs.existsSync(absPath);
-
-            filesToPatch.push({
-                patch: p,
-                relativePath: relPath,
-                absolutePath: absPath,
-                exists
-            });
-
-            if (exists) {
-                filesToBackup.push(relPath);
-            }
-        }
-
-        // 2. Perform Backup Archiving
-        if (!dryRun && !noBackup && filesToBackup.length > 0) {
-            if (!fs.existsSync(backupDir)) {
-                fs.mkdirSync(backupDir, { recursive: true });
-            }
-            const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-            const backupFilename = `backup-${timestamp}.tar.gz`;
-            const backupPath = path.join(backupDir, backupFilename);
-
-            logger.info(`Archiving ${filesToBackup.length} original file(s) into: ${backupPath}`);
-            await tar.c(
-                {
-                    gzip: true,
-                    file: backupPath,
-                    cwd: projectDir
-                },
-                filesToBackup
-            );
-            logger.info("Snapshot successfully created.");
-        }
-
-        // 3. Dry-Run / Test Patch Application
-        logger.info(dryRun ? "Simulating patch application (dry-run)..." : "Applying patches...");
-        const results = [];
-        let hasFailures = false;
-
-        for (const fileObj of filesToPatch) {
-            let originalContent = "";
-            if (fileObj.exists) {
-                originalContent = fs.readFileSync(fileObj.absolutePath, "utf8");
-            }
-
-            const patchedResult = diff.applyPatch(originalContent, fileObj.patch);
-            if (patchedResult === false) {
-                logger.error(`[FAIL] Conflict: Could not apply patch to ${fileObj.relativePath}`);
-                hasFailures = true;
+                // Sort alphabetically ascending
+                files.sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }));
+                files.forEach(f => patchSources.push({ type: "file", path: f }));
             } else {
-                results.push({
-                    fileObj,
-                    content: patchedResult
-                });
-                logger.info(`[OK] ${dryRun ? "Can patch" : "Patched"} ${fileObj.relativePath}`);
+                patchSources.push({ type: "file", path: absolutePath });
             }
         }
 
-        if (hasFailures) {
-            logger.error("\nError: Patch application encountered conflicts. No changes written.");
-            process.exit(1);
+        // Virtual file cache to process patch updates one-by-one in memory
+        const fileCache = {};
+
+        function getFileContent(absPath) {
+            if (fileCache[absPath]) {
+                return fileCache[absPath].content;
+            }
+            const exists = fs.existsSync(absPath);
+            const content = exists ? fs.readFileSync(absPath, "utf8") : "";
+            fileCache[absPath] = {
+                content,
+                exists,
+                originalContent: content,
+                dirty: false
+            };
+            return content;
         }
 
-        // 4. Write changes to disk if not dry-run
+        for (const sourceItem of patchSources) {
+            logger.info(`Loading patch from: ${sourceItem.path}`);
+            let patchContent = "";
+            if (sourceItem.type === "url") {
+                const response = await axios.get(sourceItem.path, { responseType: "text" });
+                patchContent = response.data;
+            } else {
+                patchContent = fs.readFileSync(sourceItem.path, "utf8");
+            }
+
+            let parsed = diff.parsePatch(patchContent);
+            if (parsed.length === 0) {
+                logger.warn(`Warning: Could not parse any valid patches from ${sourceItem.path}`);
+                continue;
+            }
+
+            if (reverse) {
+                logger.info("Reversing patches...");
+                parsed = parsed.map(reversePatch);
+            }
+
+            for (const p of parsed) {
+                const oldFile = p.oldFileName;
+                const newFile = p.newFileName;
+                const targetFile = (oldFile && oldFile !== "/dev/null") ? oldFile : newFile;
+                const relPath = cleanPath(targetFile);
+                if (!relPath || relPath === "/dev/null") continue;
+
+                const absPath = path.join(projectDir, relPath);
+                const originalContent = getFileContent(absPath);
+
+                const patchedResult = diff.applyPatch(originalContent, p);
+                if (patchedResult === false) {
+                    logger.error(`[FAIL] Conflict: Could not apply patch from ${path.basename(sourceItem.path)} to ${relPath}`);
+                    process.exit(1);
+                }
+
+                fileCache[absPath].content = patchedResult;
+                fileCache[absPath].dirty = true;
+                fileCache[absPath].relativePath = relPath;
+                logger.info(`[OK] Applied patch step to ${relPath}`);
+            }
+        }
+
+        // Identify modified/new files
+        const modifiedFiles = Object.keys(fileCache).filter(key => fileCache[key].dirty);
+        if (modifiedFiles.length === 0) {
+            logger.info("No modifications to apply.");
+            return;
+        }
+
+        // 2. Perform Backup Snapshot of existing original files
+        if (!dryRun && !noBackup) {
+            const filesToBackup = modifiedFiles
+                .filter(key => fileCache[key].exists)
+                .map(key => fileCache[key].relativePath);
+
+            if (filesToBackup.length > 0) {
+                if (!fs.existsSync(backupDir)) {
+                    fs.mkdirSync(backupDir, { recursive: true });
+                }
+                const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+                const backupFilename = `backup-${timestamp}.tar.gz`;
+                const backupPath = path.join(backupDir, backupFilename);
+
+                logger.info(`Archiving ${filesToBackup.length} original file(s) into: ${backupPath}`);
+                await tar.c(
+                    {
+                        gzip: true,
+                        file: backupPath,
+                        cwd: projectDir
+                    },
+                    filesToBackup
+                );
+                logger.info("Snapshot successfully created.");
+            }
+        }
+
+        // 3. Write changes to disk if not dry-run
         if (!dryRun) {
-            for (const res of results) {
-                const dirOfFile = path.dirname(res.fileObj.absolutePath);
+            for (const absPath of modifiedFiles) {
+                const cacheObj = fileCache[absPath];
+                const dirOfFile = path.dirname(absPath);
                 if (!fs.existsSync(dirOfFile)) {
                     fs.mkdirSync(dirOfFile, { recursive: true });
                 }
-                fs.writeFileSync(res.fileObj.absolutePath, res.content, "utf8");
+                fs.writeFileSync(absPath, cacheObj.content, "utf8");
+                logger.info(`[WRITE] Saved changes to ${cacheObj.relativePath}`);
             }
             logger.info("\nAll patches successfully applied to files.");
         } else {
-            logger.info("\nDry-run complete. Patch can be applied cleanly without errors.");
+            logger.info("\nDry-run complete. All patches can be applied cleanly without errors.");
         }
 
     } catch (err) {
