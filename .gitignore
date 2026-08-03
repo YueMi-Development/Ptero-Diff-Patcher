@@ -142,5 +142,5 @@ vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 .vite/
 
-# Scratch testing directory
-scratch/
+# Unit test temporary files
+test/scratch/
