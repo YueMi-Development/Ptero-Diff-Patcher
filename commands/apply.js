@@ -3,7 +3,7 @@ const path = require("path");
 const axios = require("axios");
 const diff = require("diff");
 const tar = require("tar");
-const crypto = require("crypto");
+const { getPatchHash } = require("../utils/hash");
 const { getConfig } = require("../utils/config");
 const { DEFAULT_PROJECT_DIR, DEFAULT_BACKUP_DIR } = require("../utils/const");
 const logger = require("../utils/logger");
@@ -36,10 +36,6 @@ function reversePatch(patch) {
             };
         })
     };
-}
-
-function getPatchHash(content) {
-    return crypto.createHash("sha256").update(content, "utf8").digest("hex");
 }
 
 function getAppliedPatches(projectDir) {

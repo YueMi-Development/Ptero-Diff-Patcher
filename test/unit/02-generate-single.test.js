@@ -40,9 +40,12 @@ describe("generate command (single commit) step", () => {
         execSync('git commit -m "Second commit"', { cwd: TEST_PROJECT_DIR });
 
         const out = runCLI(`generate --commits HEAD~1..HEAD --output "${PATCH_OUT_PREFIX}"`);
-        expect(out).toContain("Patch created: 0001-second-commit-modified.patch");
+        const match = out.match(/Patch created: (0001-[a-f0-9]+-MOD\.patch)/);
+        expect(match).not.toBeNull();
+        const filename = match[1];
+        expect(out).toContain(`Patch created: ${filename}`);
 
-        const generatedPatchFile = path.join(TEST_SCRATCH_DIR, "0001-second-commit-modified.patch");
+        const generatedPatchFile = path.join(TEST_SCRATCH_DIR, filename);
         expect(fs.existsSync(generatedPatchFile)).toBe(true);
         expect(fs.readFileSync(generatedPatchFile, "utf8")).toContain("+Modified Line 2");
     });

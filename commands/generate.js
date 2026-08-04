@@ -5,6 +5,7 @@ const diff = require("diff");
 const { getConfig } = require("../utils/config");
 const { DEFAULT_PROJECT_DIR, DEFAULT_PATCHES_DIR } = require("../utils/const");
 const logger = require("../utils/logger");
+const { getPatchHash } = require("../utils/hash");
 
 function padZero(num, size = 4) {
     let s = num + "";
@@ -17,6 +18,13 @@ function sanitizeName(name) {
         .toLowerCase()
         .replace(/[^a-z0-9]+/g, "-") // replace non-alphanumeric chars with hyphen
         .replace(/^-+|-+$/g, "");    // trim leading/trailing hyphens
+}
+
+function formatPatchFilename(seqStr, title, typeSuffix) {
+    const prefix = `${seqStr}-`;
+    const suffix = `-${typeSuffix}`;
+    const slug = title.substring(0, 8);
+    return `${prefix}${slug}${suffix}`;
 }
 
 async function resolveCommitRef(projectDir, ref) {
@@ -206,18 +214,22 @@ module.exports = async function generate(parsed) {
             // Write added files patch if any
             if (addedDiffs.length > 0) {
                 const seqStr = padZero(sequenceNum++);
-                const filename = `${seqStr}-${step.title}-added.patch`;
+                const content = addedDiffs.join("\n");
+                const hash = getPatchHash(content);
+                const filename = formatPatchFilename(seqStr, hash, "NEW.patch");
                 const filepath = path.join(outDir, filename);
-                fs.writeFileSync(filepath, addedDiffs.join("\n"), "utf8");
+                fs.writeFileSync(filepath, content, "utf8");
                 logger.info(`Patch created: ${filename} (at ${outDir})`);
             }
 
             // Write modified files patch if any
             if (modifiedDiffs.length > 0) {
                 const seqStr = padZero(sequenceNum++);
-                const filename = `${seqStr}-${step.title}-modified.patch`;
+                const content = modifiedDiffs.join("\n");
+                const hash = getPatchHash(content);
+                const filename = formatPatchFilename(seqStr, hash, "MOD.patch");
                 const filepath = path.join(outDir, filename);
-                fs.writeFileSync(filepath, modifiedDiffs.join("\n"), "utf8");
+                fs.writeFileSync(filepath, content, "utf8");
                 logger.info(`Patch created: ${filename} (at ${outDir})`);
             }
         }
