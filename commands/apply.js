@@ -77,6 +77,7 @@ module.exports = async function apply(parsed) {
     const force = !!parsed.options.force;
 
     const noFuzzy = !!(parsed.options["no-fuzzy"] || parsed.options.noFuzzy);
+    const noIntegrity = !!(parsed.options["no-integrity"] || parsed.options.noIntegrity);
     const fuzzOpt = parsed.options.fuzz || parsed.options.f;
     const maxFuzz = noFuzzy ? 0 : (fuzzOpt !== undefined ? parseInt(fuzzOpt, 10) || 0 : 3);
 
@@ -141,6 +142,17 @@ module.exports = async function apply(parsed) {
 
             const hash = getPatchHash(patchContent);
             const patchIdentifier = sourceItem.type === "url" ? sourceItem.path : path.basename(sourceItem.path);
+
+            if (sourceItem.type !== "url" && !noIntegrity) {
+                const match = patchIdentifier.match(/^\d{4}-[a-f0-9]{8}-([a-f0-9]{8})-(NEW|MOD)\.patch$/i);
+                if (match) {
+                    const expectedHashPrefix = match[1].toLowerCase();
+                    const actualHashPrefix = hash.substring(0, 8).toLowerCase();
+                    if (actualHashPrefix !== expectedHashPrefix) {
+                        throw new Error(`Integrity check failed: patch content hash prefix '${actualHashPrefix}' does not match filename expected '${expectedHashPrefix}' for ${patchIdentifier}`);
+                    }
+                }
+            }
 
             const alreadyApplied = appliedState.applied.some(item => item.hash === hash);
 
