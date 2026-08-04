@@ -20,11 +20,13 @@ function sanitizeName(name) {
         .replace(/^-+|-+$/g, "");    // trim leading/trailing hyphens
 }
 
-function formatPatchFilename(seqStr, title, typeSuffix) {
-    const prefix = `${seqStr}-`;
-    const suffix = `-${typeSuffix}`;
+function formatPatchFilename(seqStr, commitHash, title, typeSuffix) {
+    const separator = "-";
+    const prefix = `${seqStr}`;
+    const suffix = `${typeSuffix}`;
+    const gitCommitHash = (commitHash || "00000000").substring(0, 8);
     const slug = title.substring(0, 8);
-    return `${prefix}${slug}${suffix}`;
+    return `${prefix}${separator}${gitCommitHash}${separator}${slug}${separator}${suffix}`;
 }
 
 async function resolveCommitRef(projectDir, ref) {
@@ -142,6 +144,7 @@ module.exports = async function generate(parsed) {
             workQueue.push({
                 title,
                 trees,
+                oid: commit.oid,
                 isWorkdir: false
             });
         }
@@ -216,7 +219,7 @@ module.exports = async function generate(parsed) {
                 const seqStr = padZero(sequenceNum++);
                 const content = addedDiffs.join("\n");
                 const hash = getPatchHash(content);
-                const filename = formatPatchFilename(seqStr, hash, "NEW.patch");
+                const filename = formatPatchFilename(seqStr, step.oid, hash, "NEW.patch");
                 const filepath = path.join(outDir, filename);
                 fs.writeFileSync(filepath, content, "utf8");
                 logger.info(`Patch created: ${filename} (at ${outDir})`);
@@ -227,7 +230,7 @@ module.exports = async function generate(parsed) {
                 const seqStr = padZero(sequenceNum++);
                 const content = modifiedDiffs.join("\n");
                 const hash = getPatchHash(content);
-                const filename = formatPatchFilename(seqStr, hash, "MOD.patch");
+                const filename = formatPatchFilename(seqStr, step.oid, hash, "MOD.patch");
                 const filepath = path.join(outDir, filename);
                 fs.writeFileSync(filepath, content, "utf8");
                 logger.info(`Patch created: ${filename} (at ${outDir})`);
