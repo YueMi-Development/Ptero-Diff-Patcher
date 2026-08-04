@@ -3,6 +3,7 @@ const path = require("path");
 const axios = require("axios");
 const diff = require("diff");
 const tar = require("tar");
+const crypto = require("crypto");
 const { getConfig } = require("../utils/config");
 const { DEFAULT_PROJECT_DIR, DEFAULT_BACKUP_DIR } = require("../utils/const");
 const logger = require("../utils/logger");
@@ -37,12 +38,36 @@ function reversePatch(patch) {
     };
 }
 
+function getPatchHash(content) {
+    return crypto.createHash("sha256").update(content, "utf8").digest("hex");
+}
+
+function getAppliedPatches(projectDir) {
+    const statePath = path.join(projectDir, ".ptero-applied-patches.json");
+    if (!fs.existsSync(statePath)) {
+        return { applied: [] };
+    }
+    try {
+        const fileContent = fs.readFileSync(statePath, "utf8");
+        return JSON.parse(fileContent) || { applied: [] };
+    } catch (e) {
+        return { applied: [] };
+    }
+}
+
+function saveAppliedPatches(projectDir, state) {
+    const statePath = path.join(projectDir, ".ptero-applied-patches.json");
+    try {
+        fs.writeFileSync(statePath, JSON.stringify(state, null, 2), "utf8");
+    } catch (e) {
+        logger.error(`Failed to save applied patch state: ${e.message}`);
+    }
+}
+
 module.exports = async function apply(parsed) {
     const patchSource = parsed._args[0];
     if (!patchSource) {
-        logger.error("Error: Please specify a patch file path or URL.");
-        logger.info("Usage: ptero-patch apply <patch-file-or-url> [options]");
-        process.exit(1);
+        throw new Error("Please specify a patch file path or URL.");
     }
 
     const config = getConfig();
@@ -52,7 +77,8 @@ module.exports = async function apply(parsed) {
     const dryRun = !!(parsed.options["dry-run"] || parsed.options.dryRun);
     const noBackup = !!(parsed.options["no-backup"] || parsed.options.noBackup);
     const reverse = !!(parsed.options.reverse || parsed.options.R);
-    
+    const force = !!parsed.options.force;
+
     const noFuzzy = !!(parsed.options["no-fuzzy"] || parsed.options.noFuzzy);
     const fuzzOpt = parsed.options.fuzz || parsed.options.f;
     const maxFuzz = noFuzzy ? 0 : (fuzzOpt !== undefined ? parseInt(fuzzOpt, 10) || 0 : 3);
@@ -64,8 +90,7 @@ module.exports = async function apply(parsed) {
         } else {
             const absolutePath = path.isAbsolute(patchSource) ? patchSource : path.join(process.cwd(), patchSource);
             if (!fs.existsSync(absolutePath)) {
-                logger.error(`Error: Path does not exist at ${absolutePath}`);
-                process.exit(1);
+                throw new Error(`Path does not exist at ${absolutePath}`);
             }
             const stat = fs.statSync(absolutePath);
             if (stat.isDirectory()) {
@@ -74,8 +99,7 @@ module.exports = async function apply(parsed) {
                     .map(f => path.join(absolutePath, f));
 
                 if (files.length === 0) {
-                    logger.error(`Error: No .patch or .diff files found in directory ${absolutePath}`);
-                    process.exit(1);
+                    throw new Error(`No .patch or .diff files found in directory ${absolutePath}`);
                 }
 
                 // Sort alphabetically ascending
@@ -105,19 +129,33 @@ module.exports = async function apply(parsed) {
             return content;
         }
 
+        const appliedState = getAppliedPatches(projectDir);
+        const newlyApplied = [];
+
         for (const sourceItem of patchSources) {
-            logger.info(`Loading patch from: ${sourceItem.path}`);
             let patchContent = "";
             if (sourceItem.type === "url") {
+                logger.info(`Loading patch from: ${sourceItem.path}`);
                 const response = await axios.get(sourceItem.path, { responseType: "text" });
                 patchContent = response.data;
             } else {
                 patchContent = fs.readFileSync(sourceItem.path, "utf8");
             }
 
+            const hash = getPatchHash(patchContent);
+            const patchIdentifier = sourceItem.type === "url" ? sourceItem.path : path.basename(sourceItem.path);
+
+            if (!force) {
+                const alreadyApplied = appliedState.applied.some(item => item.hash === hash);
+                if (alreadyApplied) {
+                    logger.info(`Skipping patch (already applied): ${patchIdentifier}`);
+                    continue;
+                }
+            }
+
             let parsed = diff.parsePatch(patchContent);
             if (parsed.length === 0) {
-                logger.warn(`Warning: Could not parse any valid patches from ${sourceItem.path}`);
+                logger.warn(`Warning: Could not parse any valid patches from ${patchIdentifier}`);
                 continue;
             }
 
@@ -159,8 +197,7 @@ module.exports = async function apply(parsed) {
                 }
 
                 if (patchedResult === false) {
-                    logger.error(`[FAIL] Conflict: Could not apply patch from ${path.basename(sourceItem.path)} to ${relPath} (tried fuzz 0 to ${maxFuzz})`);
-                    process.exit(1);
+                    throw new Error(`Conflict: Could not apply patch from ${patchIdentifier} to ${relPath} (tried fuzz 0 to ${maxFuzz})`);
                 }
 
                 fileCache[absPath].content = patchedResult;
@@ -168,6 +205,12 @@ module.exports = async function apply(parsed) {
                 fileCache[absPath].relativePath = relPath;
                 logger.info(`[OK] Applied patch step to ${relPath} (fuzz: ${appliedFuzz})`);
             }
+
+            newlyApplied.push({
+                source: patchIdentifier,
+                hash,
+                appliedAt: new Date().toISOString()
+            });
         }
 
         // Identify modified/new files
@@ -222,6 +265,13 @@ module.exports = async function apply(parsed) {
                 fs.writeFileSync(absPath, cacheObj.content, "utf8");
                 logger.info(`[WRITE] Saved changes to ${cacheObj.relativePath}`);
             }
+
+            // Persist the newly applied patches to state file
+            for (const item of newlyApplied) {
+                appliedState.applied.push(item);
+            }
+            saveAppliedPatches(projectDir, appliedState);
+
             logger.info("\nAll patches successfully applied to files.");
         } else {
             logger.info("\nDry-run complete. All patches can be applied cleanly without errors.");
@@ -229,6 +279,6 @@ module.exports = async function apply(parsed) {
 
     } catch (err) {
         logger.error("Error during patch application:", err.message);
-        process.exit(1);
+        throw err;
     }
 };
