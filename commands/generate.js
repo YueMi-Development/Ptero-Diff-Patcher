@@ -204,7 +204,7 @@ module.exports = async function generate(parsed) {
                 const filename = `${seqStr}-${step.title}-added.patch`;
                 const filepath = path.join(outDir, filename);
                 fs.writeFileSync(filepath, addedDiffs.join("\n"), "utf8");
-                logger.info(`Patch created: ${filename}`);
+                logger.info(`Patch created: ${filename} (at ${outDir})`);
             }
 
             // Write modified files patch if any
@@ -213,7 +213,7 @@ module.exports = async function generate(parsed) {
                 const filename = `${seqStr}-${step.title}-modified.patch`;
                 const filepath = path.join(outDir, filename);
                 fs.writeFileSync(filepath, modifiedDiffs.join("\n"), "utf8");
-                logger.info(`Patch created: ${filename}`);
+                logger.info(`Patch created: ${filename} (at ${outDir})`);
             }
         }
 
