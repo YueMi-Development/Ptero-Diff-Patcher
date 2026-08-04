@@ -102,8 +102,17 @@ module.exports = async function generate(parsed) {
         baseName = path.basename(resolvedOutput).replace(/\.(patch|diff)$/i, "");
     }
 
-    if (!fs.existsSync(outDir)) {
+    if (isDir) {
+        if (fs.existsSync(outDir)) {
+            if (outDir !== projectDir && outDir !== process.cwd()) {
+                fs.rmSync(outDir, { recursive: true, force: true });
+            }
+        }
         fs.mkdirSync(outDir, { recursive: true });
+    } else {
+        if (!fs.existsSync(outDir)) {
+            fs.mkdirSync(outDir, { recursive: true });
+        }
     }
 
     try {
