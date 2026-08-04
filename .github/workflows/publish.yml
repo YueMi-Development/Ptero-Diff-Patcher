@@ -1,0 +1,39 @@
+name: Publish to npm
+
+on:
+  push:
+    branches:
+      - 'v*.*.*'
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Update package.json version to match branch name
+        run: |
+          # Extract branch name (e.g. refs/heads/v1.2.3 -> v1.2.3)
+          BRANCH_NAME="${GITHUB_REF#refs/heads/}"
+          echo "Branch name: $BRANCH_NAME"
+          
+          # Remove leading 'v' to get version (e.g. v1.2.3 -> 1.2.3)
+          VERSION="${BRANCH_NAME#v}"
+          echo "Setting version to: $VERSION"
+          
+          npm version "$VERSION" --no-git-tag-version
+
+      - name: Publish to npm
+        run: npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
