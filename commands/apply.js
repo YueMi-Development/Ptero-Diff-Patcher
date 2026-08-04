@@ -158,7 +158,10 @@ module.exports = async function apply(parsed) {
             }
         }
 
-        patchSources = patchSources.filter(s => !s.invalid);
+        // Remove invalid patches only when integrity verification is active
+        if (!noIntegrity) {
+            patchSources = patchSources.filter(s => !s.invalid);
+        }
 
         if (patchSources.length === 0) {
             logger.info("No valid patches to apply after integrity check.");
