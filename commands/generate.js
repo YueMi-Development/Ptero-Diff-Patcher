@@ -63,6 +63,7 @@ module.exports = async function generate(parsed) {
     }
 
     const defaultOutput = config.patchesDir || DEFAULT_PATCHES_DIR;
+    const isDefault = !parsed.options.output && !parsed.options.o;
     const outputOpt = parsed.options.output || parsed.options.o || defaultOutput;
 
     const parts = commitsOpt.split("..");
@@ -74,15 +75,19 @@ module.exports = async function generate(parsed) {
     let baseName = "patch";
 
     const resolvedOutput = path.isAbsolute(outputOpt) ? outputOpt : path.join(process.cwd(), outputOpt);
+    let isDir = isDefault;
     try {
         const stats = fs.existsSync(resolvedOutput) ? fs.statSync(resolvedOutput) : null;
         if (stats && stats.isDirectory()) {
-            outDir = resolvedOutput;
-        } else {
-            outDir = path.dirname(resolvedOutput);
-            baseName = path.basename(resolvedOutput).replace(/\.(patch|diff)$/i, "");
+            isDir = true;
         }
     } catch (e) {
+        // ignore
+    }
+
+    if (isDir) {
+        outDir = resolvedOutput;
+    } else {
         outDir = path.dirname(resolvedOutput);
         baseName = path.basename(resolvedOutput).replace(/\.(patch|diff)$/i, "");
     }
