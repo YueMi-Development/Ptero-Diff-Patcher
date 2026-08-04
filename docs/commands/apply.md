@@ -40,41 +40,41 @@ graph TD
     Start[Start apply/undo] --> LoadPatches[Load patch contents from sources]
     LoadPatches --> Integrity{--no-integrity active?}
     Integrity -->|No| ValIntegrity[Perform upfront integrity verification]
-    Integrity -->|Yes| FilterPatches[Filter out invalid patches & warn]
-    ValIntegrity --> FilterPatches
-    
-    FilterPatches --> CheckEmpty{Any patches left?}
+    Integrity -->|Yes| IteratePatches
+
+    ValIntegrity --> FilterInvalid[Filter out invalid patches & warn]
+    FilterInvalid --> CheckEmpty{Any patches left?}
     CheckEmpty -->|No| ExitDone[Log info & exit]
     CheckEmpty -->|Yes| CheckReverse{Is reverse/undo active?}
-    
+
     CheckReverse -->|Yes| ReverseList[Reverse list order of patches]
     CheckReverse -->|No| IteratePatches[Iterate patches one by one]
     ReverseList --> IteratePatches
-    
+
     IteratePatches --> Parse[Parse patch file contents]
     Parse --> CheckState{Already applied / undoable?}
     CheckState -->|Skip| GetNext{Next patch?}
     CheckState -->|Proceed| LoopHunks[Iterate file changes in patch]
-    
+
     LoopHunks --> FuzzLoop[Try applying with fuzz factor 0 to maxFuzz]
     FuzzLoop --> CheckFit{Fit successful?}
     CheckFit -->|Yes| UpdateCache[Update virtual file cache in memory]
     CheckFit -->|No| ErrConflict[Abort & throw conflict error]
-    
+
     UpdateCache --> NextHunk{More file changes?}
     NextHunk -->|Yes| LoopHunks
     NextHunk -->|No| GetNext
-    
+
     GetNext -->|Yes| IteratePatches
     GetNext -->|No| CheckDry{Is --dry-run?}
-    
+
     CheckDry -->|Yes| LogDryRun[Log dry-run completion & exit]
     CheckDry -->|No| Backup{Is --no-backup?}
-    
+
     Backup -->|No| SaveBackup[Create backup snapshot .tar.gz]
     Backup -->|Yes| WriteDisk[Commit modified files to disk]
     SaveBackup --> WriteDisk
-    
+
     WriteDisk --> SaveMeta[Update applied patches state metadata]
     SaveMeta --> Done[Done]
 ```
