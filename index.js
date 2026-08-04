@@ -10,6 +10,7 @@ Pterodactyl Diff/Patch Applier CLI (ptero-patch)
 Usage:
   ptero-patch init [options]
   ptero-patch apply <patch-file-or-url> [options]
+  ptero-patch undo <patch-file-or-url> [options]
   ptero-patch generate [options]
   ptero-patch snapshot list
   ptero-patch snapshot restore <name>
@@ -17,6 +18,7 @@ Usage:
 Commands:
   init              Initialize/customize configuration paths
   apply             Apply a unified diff or patch file to the project
+  undo              Undo (reverse apply) a patch and remove it from the applied list
   generate          Generate a patch file from a Git repository commit range
   snapshot          Manage backups/snapshots of project files (list or restore)
 
@@ -68,6 +70,7 @@ async function main() {
                 await initCmd(parsed);
                 break;
             case "apply":
+            case "undo":
                 const applyCmd = require("./commands/apply");
                 await applyCmd(parsed);
                 break;

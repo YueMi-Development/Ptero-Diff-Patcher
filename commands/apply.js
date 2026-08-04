@@ -76,7 +76,8 @@ module.exports = async function apply(parsed) {
 
     const dryRun = !!(parsed.options["dry-run"] || parsed.options.dryRun);
     const noBackup = !!(parsed.options["no-backup"] || parsed.options.noBackup);
-    const reverse = !!(parsed.options.reverse || parsed.options.R);
+    const isUndo = parsed._command === "undo" || !!parsed.options.undo;
+    const reverse = isUndo || !!(parsed.options.reverse || parsed.options.R);
     const force = !!parsed.options.force;
 
     const noFuzzy = !!(parsed.options["no-fuzzy"] || parsed.options.noFuzzy);
@@ -145,9 +146,14 @@ module.exports = async function apply(parsed) {
             const hash = getPatchHash(patchContent);
             const patchIdentifier = sourceItem.type === "url" ? sourceItem.path : path.basename(sourceItem.path);
 
-            if (!force) {
-                const alreadyApplied = appliedState.applied.some(item => item.hash === hash);
-                if (alreadyApplied) {
+            const alreadyApplied = appliedState.applied.some(item => item.hash === hash);
+
+            if (isUndo) {
+                if (!alreadyApplied && !force) {
+                    throw new Error(`Patch is not marked as applied: ${patchIdentifier}. Use --force to proceed anyway.`);
+                }
+            } else {
+                if (alreadyApplied && !force) {
                     logger.info(`Skipping patch (already applied): ${patchIdentifier}`);
                     continue;
                 }
@@ -206,11 +212,18 @@ module.exports = async function apply(parsed) {
                 logger.info(`[OK] Applied patch step to ${relPath} (fuzz: ${appliedFuzz})`);
             }
 
-            newlyApplied.push({
-                source: patchIdentifier,
-                hash,
-                appliedAt: new Date().toISOString()
-            });
+            if (isUndo) {
+                newlyApplied.push({ action: "remove", hash });
+            } else {
+                newlyApplied.push({
+                    action: "add",
+                    item: {
+                        source: patchIdentifier,
+                        hash,
+                        appliedAt: new Date().toISOString()
+                    }
+                });
+            }
         }
 
         // Identify modified/new files
@@ -266,9 +279,13 @@ module.exports = async function apply(parsed) {
                 logger.info(`[WRITE] Saved changes to ${cacheObj.relativePath}`);
             }
 
-            // Persist the newly applied patches to state file
-            for (const item of newlyApplied) {
-                appliedState.applied.push(item);
+            // Persist the newly applied/removed patches to state file
+            for (const actionItem of newlyApplied) {
+                if (actionItem.action === "add") {
+                    appliedState.applied.push(actionItem.item);
+                } else if (actionItem.action === "remove") {
+                    appliedState.applied = appliedState.applied.filter(item => item.hash !== actionItem.hash);
+                }
             }
             saveAppliedPatches(projectDir, appliedState);
 
