@@ -6,11 +6,49 @@ on:
       - 'v*.*.*'
 
 jobs:
-  publish:
+  version:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Configure Git
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Check Package Version
+        run: |
+          BRANCH_NAME="${GITHUB_REF#refs/heads/}"
+          echo "Branch name: $BRANCH_NAME"
+          VERSION="${BRANCH_NAME#v}"
+          echo "Setting version to: $VERSION"
+          
+          CURRENT_VERSION=$(node -p "require('./package.json').version")
+          if [ "$CURRENT_VERSION" != "$VERSION" ]; then
+            npm version "$VERSION" --no-git-tag-version
+            git add package.json package-lock.json
+            git commit -m "chore(release): bump version to $VERSION [skip ci]"
+            git push origin "$BRANCH_NAME"
+          else
+            echo "Version is already $VERSION, skipping update."
+          fi
+
+  publish:
+    runs-on: ubuntu-latest
+    needs: version
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -20,23 +58,6 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
-
-      - name: Update package.json version to match branch name
-        run: |
-          # Extract branch name (e.g. refs/heads/v1.2.3 -> v1.2.3)
-          BRANCH_NAME="${GITHUB_REF#refs/heads/}"
-          echo "Branch name: $BRANCH_NAME"
-          
-          # Remove leading 'v' to get version (e.g. v1.2.3 -> 1.2.3)
-          VERSION="${BRANCH_NAME#v}"
-          echo "Setting version to: $VERSION"
-          
-          CURRENT_VERSION=$(node -p "require('./package.json').version")
-          if [ "$CURRENT_VERSION" != "$VERSION" ]; then
-            npm version "$VERSION" --no-git-tag-version
-          else
-            echo "Version is already $VERSION, skipping update."
-          fi
 
       - name: Publish to npm
         run: npm publish
