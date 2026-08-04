@@ -3,7 +3,7 @@ const path = require("path");
 const git = require("isomorphic-git");
 const diff = require("diff");
 const { getConfig } = require("../utils/config");
-const { DEFAULT_PROJECT_DIR } = require("../utils/const");
+const { DEFAULT_PROJECT_DIR, DEFAULT_PATCHES_DIR } = require("../utils/const");
 const logger = require("../utils/logger");
 
 function padZero(num, size = 4) {
@@ -55,14 +55,15 @@ module.exports = async function generate(parsed) {
         process.exit(1);
     }
 
-    const commitsOpt = parsed.options.commits || parsed.options.c;
+    const commitsOpt = parsed.options.commits || parsed.options.commit || parsed.options.c;
     if (!commitsOpt || !commitsOpt.includes("..")) {
         logger.error("Error: Please specify a commit range using '..' (e.g. HEAD~1..HEAD or HEAD..HEAD).");
         logger.info("Usage: ptero-patch generate --commits <commit1>..<commit2>");
         process.exit(1);
     }
 
-    const outputOpt = parsed.options.output || parsed.options.o || "ptero.patch";
+    const defaultOutput = config.patchesDir || DEFAULT_PATCHES_DIR;
+    const outputOpt = parsed.options.output || parsed.options.o || defaultOutput;
 
     const parts = commitsOpt.split("..");
     const ref1 = parts[0] || "HEAD";
