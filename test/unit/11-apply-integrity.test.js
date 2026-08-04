@@ -48,9 +48,10 @@ describe("apply patch integrity check", () => {
         fs.writeFileSync(patchFile, patchContent, "utf8");
 
         const res = runCLI(`apply "${patchFile}"`);
-        expect(res.failed).toBe(true);
-        expect(res.stderr).toContain("Integrity check failed");
-        expect(res.stderr).toContain("does not match filename expected 'deadbeef'");
+        expect(res.failed).toBeUndefined();
+        expect(res).toContain("Integrity check failed");
+        expect(res).toContain("does not match filename expected 'deadbeef'");
+        expect(res).toContain("No valid patches to apply after integrity check.");
     });
 
     test("should allow patch if content hash prefix matches filename perfectly", () => {

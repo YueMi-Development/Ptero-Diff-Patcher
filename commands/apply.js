@@ -3,7 +3,7 @@ const path = require("path");
 const axios = require("axios");
 const diff = require("diff");
 const tar = require("tar");
-const { getPatchHash } = require("../utils/hash");
+const { getPatchHash, verifyIntegrity } = require("../utils/hash");
 const { getConfig } = require("../utils/config");
 const { DEFAULT_PROJECT_DIR, DEFAULT_BACKUP_DIR } = require("../utils/const");
 const logger = require("../utils/logger");
@@ -134,6 +134,7 @@ module.exports = async function apply(parsed) {
         const appliedState = getAppliedPatches(projectDir);
         const newlyApplied = [];
 
+        // Preload patch content and perform upfront integrity check
         for (const sourceItem of patchSources) {
             let patchContent = "";
             if (sourceItem.type === "url") {
@@ -143,20 +144,31 @@ module.exports = async function apply(parsed) {
             } else {
                 patchContent = fs.readFileSync(sourceItem.path, "utf8");
             }
-
-            const hash = getPatchHash(patchContent);
-            const patchIdentifier = sourceItem.type === "url" ? sourceItem.path : path.basename(sourceItem.path);
+            sourceItem.content = patchContent;
+            sourceItem.hash = getPatchHash(patchContent);
+            sourceItem.basename = sourceItem.type === "url" ? sourceItem.path : path.basename(sourceItem.path);
 
             if (sourceItem.type !== "url" && !noIntegrity) {
-                const match = patchIdentifier.match(/^\d{4}-[a-f0-9]{8}-([a-f0-9]{8})-(NEW|MOD)\.patch$/i);
-                if (match) {
-                    const expectedHashPrefix = match[1].toLowerCase();
-                    const actualHashPrefix = hash.substring(0, 8).toLowerCase();
-                    if (actualHashPrefix !== expectedHashPrefix) {
-                        throw new Error(`Integrity check failed: patch content hash prefix '${actualHashPrefix}' does not match filename expected '${expectedHashPrefix}' for ${patchIdentifier}`);
-                    }
+                try {
+                    verifyIntegrity(sourceItem.basename, patchContent);
+                } catch (e) {
+                    logger.warn(`Integrity check failed for ${sourceItem.basename}: ${e.message}. Skipping this patch.`);
+                    sourceItem.invalid = true;
                 }
             }
+        }
+
+        patchSources = patchSources.filter(s => !s.invalid);
+
+        if (patchSources.length === 0) {
+            logger.info("No valid patches to apply after integrity check.");
+            return;
+        }
+
+        for (const sourceItem of patchSources) {
+            const patchContent = sourceItem.content;
+            const hash = sourceItem.hash;
+            const patchIdentifier = sourceItem.basename;
 
             const alreadyApplied = appliedState.applied.some(item => item.hash === hash);
 
@@ -173,8 +185,7 @@ module.exports = async function apply(parsed) {
 
             let parsed = diff.parsePatch(patchContent);
             if (parsed.length === 0) {
-                logger.warn(`Warning: Could not parse any valid patches from ${patchIdentifier}`);
-                continue;
+                throw new Error(`Could not parse any valid patches from ${patchIdentifier}`);
             }
 
             if (reverse) {
