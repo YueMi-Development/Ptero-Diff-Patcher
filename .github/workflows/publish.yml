@@ -31,7 +31,12 @@ jobs:
           VERSION="${BRANCH_NAME#v}"
           echo "Setting version to: $VERSION"
           
-          npm version "$VERSION" --no-git-tag-version
+          CURRENT_VERSION=$(node -p "require('./package.json').version")
+          if [ "$CURRENT_VERSION" != "$VERSION" ]; then
+            npm version "$VERSION" --no-git-tag-version
+          else
+            echo "Version is already $VERSION, skipping update."
+          fi
 
       - name: Publish to npm
         run: npm publish
