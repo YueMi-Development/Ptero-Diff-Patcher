@@ -108,6 +108,10 @@ module.exports = async function apply(parsed) {
             }
         }
 
+        if (reverse) {
+            patchSources.reverse();
+        }
+
         // Virtual file cache to process patch updates one-by-one in memory
         const fileCache = {};
 
